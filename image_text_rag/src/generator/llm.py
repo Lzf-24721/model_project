@@ -25,14 +25,9 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-# ── 全局配置 ──
-try:
-    from ..config.loader import Config
-except ImportError:
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from config.loader import Config
+from ..common import load_config, get_logger
+Config = load_config()
+_log = get_logger(__name__)
 
 
 ROLE_DESCRIPTION = (

@@ -5,7 +5,6 @@ Streamlit 可视化界面 — 多模态 RAG 技术工程 Demo
 """
 from __future__ import annotations
 
-import tempfile
 import time
 from pathlib import Path
 from typing import List
@@ -22,10 +21,11 @@ if str(_PROJECT_ROOT) not in sys.path:
 from src.config.loader import Config
 from src.embedding.clip_onnx import CLIPEmbedderONNX as CLIPEmbedder
 from src.vectordb.store import VectorStore
-from src.retriever.engine import Retriever, RetrievedChunk
 from src.generator.llm import Generator
 from src.preprocessing.chunker import TextChunker
 from src.preprocessing.image_processor import ImagePreprocessor
+from src.service.pipeline import RAGPipeline
+from src.retriever.engine import RetrievedChunk
 
 st.set_page_config(
     page_title=Config.UI_TITLE,
@@ -105,82 +105,44 @@ st.markdown("""
 # 组件初始化
 # ══════════════════════════════════════════════════════════════
 @st.cache_resource
-def _init_embedder():
-    return CLIPEmbedder()
-
-@st.cache_resource
-def _init_store(_dim: int):
-    return VectorStore(dim=_dim, persist_dir=Config.PERSIST_DIR)
+def _init_pipeline():
+    emb = CLIPEmbedder()
+    store = VectorStore(dim=emb.dim, persist_dir=Config.PERSIST_DIR)
+    gen = Generator()
+    return RAGPipeline(emb, store, gen, TextChunker(), ImagePreprocessor())
 
 def _init_session():
-    if "embedder" not in st.session_state:
-        st.session_state.embedder = _init_embedder()
-    emb = st.session_state.embedder
-    if "store" not in st.session_state:
-        st.session_state.store = _init_store(emb.dim)
-    if "retriever" not in st.session_state:
-        st.session_state.retriever = Retriever(emb, st.session_state.store)
-    if "generator" not in st.session_state:
-        st.session_state.generator = Generator()
+    if "pipeline" not in st.session_state:
+        st.session_state.pipeline = _init_pipeline()
     if "messages" not in st.session_state:
         st.session_state.messages = []
-    if "chunker" not in st.session_state:
-        st.session_state.chunker = TextChunker()
-    if "img_proc" not in st.session_state:
-        st.session_state.img_proc = ImagePreprocessor()
 
 _init_session()
 
-emb:   CLIPEmbedder    = st.session_state.embedder
-store: VectorStore     = st.session_state.store
-ret:   Retriever       = st.session_state.retriever
-gen:   Generator       = st.session_state.generator
-chunk: TextChunker     = st.session_state.chunker
-img_p: ImagePreprocessor = st.session_state.img_proc
+pipe: RAGPipeline = st.session_state.pipeline
 
 # ══════════════════════════════════════════════════════════════
 # 对话处理函数
 # ══════════════════════════════════════════════════════════════
 def _handle_rag_chat(question: str):
+    "RAG 增强对话 — 委托给 RAGPipeline"
     st.session_state.messages.append({"role": "user", "content": question})
-    t0 = time.time()
-    results = ret.search(question)
-    t_search = (time.time() - t0) * 1000
-    if not results:
-        try:
-            answer = gen.answer_with_raw_context(question, "（未检索到相关文档，请基于通用知识回答）",
-                system_prompt="你是一个智能助手。请基于通用知识简要回答用户问题。")
-        except Exception as e:
-            answer = f"**⚠ 调用失败**\n{type(e).__name__}: {e}"
-        st.session_state.messages.append({"role": "assistant", "content": answer, "results": []})
-    else:
-        t1 = time.time()
-        try:
-            answer = gen.answer(question, results)
-        except Exception as e:
-            answer = f"**⚠ LLM 调用失败**\n\n{type(e).__name__}: {e}\n\n### 检索结果\n"
-            for i, r in enumerate(results[:3], 1):
-                answer += f"\n**{i}.** [{r.source}] ({r.score:.2%})\n> {r.text[:200]}\n"
-        t_llm = (time.time() - t1) * 1000
-        timing = f"\n\n---\n⚡ 检索 {t_search:.0f}ms · 生成 {t_llm:.0f}ms · 共 {(t_search+t_llm)/1000:.1f}s"
-        st.session_state.messages.append({
-            "role": "assistant", "content": answer + timing, "results": results,
-            "timing": {"search_ms": t_search, "llm_ms": t_llm},
-        })
+    answer, results, timing = pipe.answer(question)
+    timing_line = f"\n\n---\n⚡ 检索 {timing.get('search_ms',0):.0f}ms · 生成 {timing.get('llm_ms',0):.0f}ms"
+    st.session_state.messages.append({
+        "role": "assistant", "content": answer + timing_line,
+        "results": results, "timing": timing,
+    })
     st.rerun()
 
 def _handle_pure_llm_chat(question: str):
+    "纯 LLM 对话 — 委托给 RAGPipeline"
     st.session_state.messages.append({"role": "user", "content": question})
-    t0 = time.time()
-    try:
-        answer = gen.answer_with_raw_context(question, "（无私有知识库上下文，请基于通用知识回答）",
-            system_prompt="你是一个多模态 RAG 系统智能助手。请基于通用知识回答。如果问题涉及私密信息，请提示用户上传文档。回答简洁专业。")
-    except Exception as e:
-        answer = f"**⚠ LLM 调用失败**\n\n{type(e).__name__}: {e}"
-    t_llm = (time.time() - t0) * 1000
+    answer, timing = pipe.answer_pure_llm(question)
     st.session_state.messages.append({
-        "role": "assistant", "content": answer + f"\n\n---\n⚡ LLM 生成 {t_llm:.0f}ms",
-        "results": [], "timing": {"llm_ms": t_llm},
+        "role": "assistant",
+        "content": answer + f"\n\n---\n⚡ LLM 生成 {timing.get('llm_ms',0):.0f}ms",
+        "results": [], "timing": timing,
     })
     st.rerun()
 
@@ -247,46 +209,27 @@ with st.sidebar:
             status_text.caption(f"⏳ {source}")
             try:
                 if ext in (".png", ".jpg", ".jpeg"):
-                    img_bytes = f.read()
-                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as t:
-                        t.write(img_bytes); tp = t.name
-                    try:
-                        img_p.preprocess(tp, max_size=512, compress_quality=85)
-                        info = img_p.get_info(tp)
-                        desc = f"[图片] {Path(f.name).stem} | {info['width']}x{info['height']}"
-                    except Exception:
-                        desc = f"[图片] {Path(f.name).stem}"
-                    finally:
-                        Path(tp).unlink(missing_ok=True)  # 用完即删，不留死路径
-                    vec = emb.text_to_vector(desc)
-                    store.add(vec.reshape(1, -1), [{
-                        "text": desc, "source": source, "type": "image",
-                    }])
-                    added_total += 1
+                    n = pipe.ingest_image(f.read(), source)
+                    added_total += n
                 elif ext in (".txt", ".md"):
                     text = f.read().decode("utf-8")
-                    chunks = chunk.chunk_text(text)
-                    if chunks:
-                        vv = emb.texts_to_vectors(chunks)
-                        mm = [{"text": c, "source": source, "type": "text", "chunk_index": i} for i, c in enumerate(chunks)]
-                        store.add(vv, mm); added_total += len(chunks)
+                    n = pipe.ingest_text(text, source)
+                    added_total += n
             except Exception as e: st.toast(f"❌ {source}: {e}")
             progress.progress((idx + 1) / len(uploaded_files))
-        store.save(); progress.progress(1.0, "✅ 完成")
         status_text.caption(f"✅ 入库: {added_total} 条向量")
         st.toast(f"✅ 入库: {added_total} 条"); st.rerun()
 
     st.markdown("---")
     st.markdown("### 📊 系统状态")
-    llm_ok = gen.health_check()
+    llm_ok = pipe.llm_healthy
     c1, c2, c3 = st.columns(3)
-    c1.metric("向量数", store.count)
-    c2.metric("维度", emb.dim)
+    c1.metric("向量数", pipe.total_vectors)
+    c2.metric("维度", pipe.embedder.dim)
     c3.metric("LLM", "🟣" if llm_ok else "⚫", delta="在线" if llm_ok else "离线")
 
     st.markdown("---")
     if st.button("🗑 清空知识库", use_container_width=True):
-        store.clear(); store.save()
         st.session_state.messages = []; st.rerun()
 
 # ══════════════════════════════════════════════════════════════
@@ -298,7 +241,7 @@ tab_chat, tab_browse, tab_tech = st.tabs([
 
 # ── TAB 1: 对话 ────────────────────────────────────────────
 with tab_chat:
-    has_rag = store.count > 0
+    has_rag = pipe.total_vectors > 0
     st.markdown(f'<div style="display:flex; justify-content:flex-end; margin-bottom:8px;">{_mode_badge(has_rag)}</div>', unsafe_allow_html=True)
 
     if not st.session_state.messages:
@@ -332,15 +275,15 @@ with tab_chat:
 
 # ── TAB 2: 知识库浏览 ──────────────────────────────────────
 with tab_browse:
-    if store.count == 0:
+    if pipe.total_vectors == 0:
         st.info("📭 知识库为空，请先在侧边栏上传文档。")
     else:
-        st.markdown(f"### 📚 知识库总览 · {store.count} 条向量")
+        st.markdown(f"### 📚 知识库总览 · {pipe.total_vectors} 条向量")
         cq, ck = st.columns([3, 1])
         with cq: browse_query = st.text_input("输入关键词检索", key="browse_input")
         with ck: browse_k = st.number_input("Top-K", 1, 50, Config.TOP_K, key="browse_topk")
         if browse_query:
-            results = ret.search(browse_query, top_k=browse_k)
+            results = pipe.search(browse_query, top_k=browse_k)
             if results:
                 st.caption(f"检索到 {len(results)} 条结果")
                 st.bar_chart({r.source[:25]: r.score for r in results}, use_container_width=True)
@@ -351,7 +294,7 @@ with tab_browse:
 with tab_tech:
     st.markdown("### 🔬 向量库 & 检索引擎技术仪表盘")
 
-    if store.count == 0:
+    if pipe.total_vectors == 0:
         st.info("📭 知识库为空。请先在侧边栏上传文档，技术指标将在入库后自动展示。")
         # 仍展示 CLIP 模型基础信息
         with st.expander("🧠 CLIP 嵌入模型规格", expanded=True):
@@ -359,7 +302,7 @@ with tab_tech:
 | 属性 | 值 |
 |---|---|
 | 模型 | `{Config.MODEL_NAME}` |
-| 向量维度 | {emb.dim} |
+| 向量维度 | {pipe.embedder.dim} |
 | 设备 | `cpu` |
 | 最大文本长度 | {Config.MAX_TEXT_LENGTH} |
 | 架构 | ViT-B/32 (Vision Transformer) |
@@ -369,13 +312,13 @@ with tab_tech:
         # ════ 第一行：核心指标 ─═══
         st.markdown("#### ⚡ 核心指标")
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("📦 向量总数", store.count)
-        m2.metric("📐 维度", emb.dim)
-        m3.metric("💾 索引类型", store.index_type.upper())
+        m1.metric("📦 向量总数", pipe.total_vectors)
+        m2.metric("📐 维度", pipe.embedder.dim)
+        m3.metric("💾 索引类型", pipe.store.index_type.upper())
         # 估算内存
-        vector_mem_mb = store.count * emb.dim * 4 / (1024 * 1024)
+        vector_mem_mb = pipe.total_vectors * pipe.embedder.dim * 4 / (1024 * 1024)
         m4.metric("🧮 向量内存", f"{vector_mem_mb:.1f} MB")
-        m5.metric("🌐 LLM 状态", "🟣" if gen.health_check() else "⚫")
+        m5.metric("🌐 LLM 状态", "🟣" if pipe.llm_healthy else "⚫")
 
         st.markdown("---")
 
@@ -387,17 +330,17 @@ with tab_tech:
             st.caption("从知识库随机抽取一条向量，展示其高维特征。CLIP 向量经过 L2 归一化。")
 
             raw = [
-                r for r in (store.search(
-                    emb.text_to_vector("sample query for random"), top_k=1
-                ) if store.count > 0 else [])
+                r for r in (pipe.store.search(
+                    pipe.embedder.text_to_vector("sample query for random"), top_k=1
+                ) if pipe.total_vectors > 0 else [])
             ]
             if not raw:
                 # Fallback: generate a sample vector from CLIP directly
-                sample_vec = emb.text_to_vector("人工智能与机器学习")
+                sample_vec = pipe.embedder.text_to_vector("人工智能与机器学习")
                 st.info("使用 CLIP 实时生成的样例向量（知识库中无可检索向量）")
             else:
                 # Attempt to get actual stored vector dimensions via re-encoding
-                sample_vec = emb.text_to_vector(raw[0].metadata.get("text", "sample")[:200])
+                sample_vec = pipe.embedder.text_to_vector(raw[0].metadata.get("text", "sample")[:200])
 
             # Show first 20 dims as bar chart
             dims = min(20, len(sample_vec))
@@ -411,7 +354,7 @@ with tab_tech:
             <tr><td>标准差 σ</td><td>{np.std(sample_vec):.6f}</td></tr>
             <tr><td>L2 范数</td><td>{np.linalg.norm(sample_vec):.6f}</td></tr>
             <tr><td>min / max</td><td>{np.min(sample_vec):.4f} / {np.max(sample_vec):.4f}</td></tr>
-            <tr><td>非零维度</td><td>{np.count_nonzero(sample_vec)} / {emb.dim}</td></tr>
+            <tr><td>非零维度</td><td>{np.count_nonzero(sample_vec)} / {pipe.embedder.dim}</td></tr>
             </table>
             """, unsafe_allow_html=True)
 
@@ -423,7 +366,7 @@ with tab_tech:
             all_scores = []
 
             for w in test_words:
-                res = ret.search(w, top_k=5)
+                res = pipe.search(w, top_k=5)
                 for r in res:
                     all_scores.append(r.score)
 
@@ -436,7 +379,7 @@ with tab_tech:
 
             st.markdown("##### 🎯 各测试词最高分")
             for w in test_words:
-                res = ret.search(w, top_k=3)
+                res = pipe.search(w, top_k=3)
                 top = res[0].score if res else 0
                 st.markdown(f'{_score_bar(top, 200)} `{top:.3f}` — {w}')
 
@@ -475,7 +418,7 @@ with tab_tech:
             bench_times = []
             for w in test_words[:3]:
                 t0 = time.time()
-                ret.search(w, top_k=5)
+                pipe.search(w, top_k=5)
                 bench_times.append((time.time() - t0) * 1000)
             bench_c1, bench_c2, bench_c3 = st.columns(3)
             bench_c1.metric("平均延迟", f"{np.mean(bench_times):.1f} ms")
@@ -489,9 +432,9 @@ with tab_tech:
             <tr><td>索引算法</td><td>IndexFlatIP</td></tr>
             <tr><td>相似度度量</td><td>Inner Product (IP)</td></tr>
             <tr><td>等价于</td><td>余弦相似度</td></tr>
-            <tr><td>向量总数</td><td>{store.count}</td></tr>
-            <tr><td>维度</td><td>{emb.dim}</td></tr>
-            <tr><td>搜索复杂度</td><td>O(N·{emb.dim})</td></tr>
+            <tr><td>向量总数</td><td>{pipe.total_vectors}</td></tr>
+            <tr><td>维度</td><td>{pipe.embedder.dim}</td></tr>
+            <tr><td>搜索复杂度</td><td>O(N·{pipe.embedder.dim})</td></tr>
             <tr><td>是否精确</td><td>✅ 精确检索</td></tr>
             <tr><td>是否需训练</td><td>❌ 无需训练</td></tr>
             </table>
@@ -503,7 +446,7 @@ with tab_tech:
         st.markdown("#### 📏 文档分块统计")
 
         # Sample chunks via search
-        sample_results = ret.search("人工智能 深度学习 机器学习", top_k=min(20, store.count))
+        sample_results = pipe.search("人工智能 深度学习 机器学习", top_k=min(20, pipe.total_vectors))
         chunk_lengths = [len(r.text) for r in sample_results]
         doc_types = {}
         for r in sample_results:

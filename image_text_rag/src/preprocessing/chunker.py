@@ -12,14 +12,9 @@ from typing import List
 
 from .document import Chunk, Document
 
-# 全局配置导入
-try:
-    from ..config.loader import Config
-except ImportError:
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from config.loader import Config
+from ..common import load_config, get_logger
+Config = load_config()
+_log = get_logger(__name__)
 
 
 class TextChunker:

@@ -23,13 +23,9 @@ from PIL import Image
 
 warnings.filterwarnings("ignore")
 
-# ── 配置导入 ──
-try:
-    from ..config.loader import Config
-except ImportError:
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from config.loader import Config
+from ..common import load_config, get_logger
+Config = load_config()
+_log = get_logger(__name__)
 
 MODEL_NAME = Config.MODEL_NAME
 MAX_TEXT_LENGTH = Config.MAX_TEXT_LENGTH
@@ -37,6 +33,7 @@ ONNX_ENABLED = Config.ONNX_ENABLED
 ONNX_CACHE_DIR = Config.ONNX_CACHE_DIR
 ONNX_QUANTIZE = Config.ONNX_QUANTIZE
 ONNX_THREADS = Config.ONNX_INTRA_OP_THREADS
+BATCH_SIZE = Config.BATCH_SIZE
 
 
 class CLIPEmbedderONNX:
@@ -75,7 +72,7 @@ class CLIPEmbedderONNX:
         self._vision_path = self._cache_dir / "clip_vision_encoder.onnx"
 
         if self._text_path.exists() and self._vision_path.exists():
-            print("[ONNX] 从缓存加载模型...")
+            _log.info("从缓存加载ONNX模型")
             self._processor = CLIPProcessor.from_pretrained(MODEL_NAME)
             self._text_sess = ort.InferenceSession(
                 str(self._text_path), self._sess_opts,
@@ -87,9 +84,7 @@ class CLIPEmbedderONNX:
             )
             self._dim = self._text_sess.get_outputs()[0].shape[1]
         else:
-            print(f"[ONNX] 首次运行 — 从 {MODEL_NAME} 导出 ONNX 模型...")
-            print("[ONNX]   加载 PyTorch CLIP (仅导出用，后续不加载)...")
-            # 优先本地缓存，避免网络探测
+            _log.info("首次运行 — 从 %s 导出ONNX模型", MODEL_NAME)
             from huggingface_hub import try_to_load_from_cache
             _cache = try_to_load_from_cache(MODEL_NAME, "config.json")
             _local_only = _cache is not None
@@ -100,11 +95,9 @@ class CLIPEmbedderONNX:
             self._processor = CLIPProcessor.from_pretrained(MODEL_NAME)
             self._dim = pt_model.config.projection_dim
 
-            # 导出 text encoder
-            print("[ONNX]   导出 text_encoder...")
+            _log.info("导出 text_encoder...")
             self._export_text_encoder(pt_model)
-            # 导出 vision encoder
-            print("[ONNX]   导出 vision_encoder...")
+            _log.info("导出 vision_encoder...")
             self._export_vision_encoder(pt_model)
 
             # 量化
@@ -124,7 +117,7 @@ class CLIPEmbedderONNX:
             # 释放 PyTorch 模型
             del pt_model
 
-        print(f"[ONNX] 模型就绪 √  dim={self._dim}  threads={ONNX_THREADS}")
+        _log.info("模型就绪 dim=%d threads=%d", self._dim, ONNX_THREADS)
 
     # ── ONNX 导出 ──────────────────────────────────────────
 
@@ -159,7 +152,7 @@ class CLIPEmbedderONNX:
             },
             opset_version=18,
         )
-        print(f"[ONNX]   text_encoder → {self._text_path}")
+        _log.info("text_encoder导出 → %s", self._text_path)
 
     def _export_vision_encoder(self, pt_model):
         import torch
@@ -189,25 +182,24 @@ class CLIPEmbedderONNX:
             },
             opset_version=18,
         )
-        print(f"[ONNX]   vision_encoder → {self._vision_path}")
+        _log.info("vision_encoder导出 → %s", self._vision_path)
 
     def _quantize_model(self, model_path: Path) -> None:
         """int8 动态量化"""
         try:
             from onnxruntime.quantization import quantize_dynamic, QuantType
             q_path = model_path.with_suffix(".q.onnx")
-            print(f"[ONNX]   量化 {model_path.name}...")
+            _log.info("量化 %s...", model_path.name)
             quantize_dynamic(
                 str(model_path), str(q_path),
                 weight_type=QuantType.QUInt8,
             )
-            # 替换原文件
             q_path.rename(model_path)
-            print(f"[ONNX]   量化完成: {model_path.name}")
+            _log.info("量化完成: %s", model_path.name)
         except ImportError:
-            print("[ONNX]   ⚠ onnxruntime.quantization 未安装，跳过量化")
+            _log.warning("onnxruntime.quantization 未安装，跳过量化")
         except Exception as e:
-            print(f"[ONNX]   ⚠ 量化失败: {e}，使用浮点模型")
+            _log.warning("量化失败: %s，使用浮点模型", e)
 
     @property
     def dim(self) -> int:
@@ -222,18 +214,24 @@ class CLIPEmbedderONNX:
         if not texts:
             return np.empty((0, self.dim), dtype=np.float32)
 
-        # 必须 pad 到固定的 max_length，匹配 ONNX 输入维度
-        inputs = self._processor(
-            text=texts, return_tensors="np",
-            padding="max_length", truncation=True,
-            max_length=self._max_len,
-        )
-        onnx_inputs = {
-            "input_ids": inputs["input_ids"].astype(np.int64),
-            "attention_mask": inputs["attention_mask"].astype(np.int64),
-        }
-        features = self._text_sess.run(None, onnx_inputs)[0]
-        return self._normalize(features)
+        all_features = []
+        for i in range(0, len(texts), BATCH_SIZE):
+            batch = texts[i:i + BATCH_SIZE]
+            inputs = self._processor(
+                text=batch, return_tensors="np",
+                padding="max_length", truncation=True,
+                max_length=self._max_len,
+            )
+            onnx_inputs = {
+                "input_ids": inputs["input_ids"].astype(np.int64),
+                "attention_mask": inputs["attention_mask"].astype(np.int64),
+            }
+            features = self._text_sess.run(None, onnx_inputs)[0]
+            all_features.append(features)
+
+        if len(all_features) == 1:
+            return self._normalize(all_features[0])
+        return self._normalize(np.concatenate(all_features, axis=0))
 
     # ── 图像编码 ──────────────────────────────────────────
 

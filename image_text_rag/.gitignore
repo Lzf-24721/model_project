@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ONNX模型缓存（运行时自动生成）
+data/onnx/
+data/vector_db/
+
+# 测试临时数据
+**/test_db/
+**/test_*_db/
+
+# 虚拟环境
+agentenv/
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+/tmp/

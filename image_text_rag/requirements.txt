@@ -1,0 +1,26 @@
+# ============================================
+# 多模态 RAG — 技术工程 Demo 依赖
+# Python >= 3.10
+# ============================================
+
+# CLIP ONNX 推理（CPU 加速）
+torch>=2.0.0
+transformers>=4.44.0
+onnxruntime>=1.18.0
+onnxscript>=0.1.0
+pillow>=10.0.0
+
+# 向量数据库
+faiss-cpu>=1.7.4
+
+# vLLM 服务 (GPU 推理)
+vllm>=0.19.0
+
+# Web 界面 & API
+streamlit>=1.35.0
+
+# LLM 通信
+requests>=2.31.0
+
+# 基础工具
+numpy>=1.26.0

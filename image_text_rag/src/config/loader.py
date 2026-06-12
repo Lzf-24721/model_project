@@ -95,23 +95,28 @@ class _ConfigNamespace:
         items = {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
         return f"Config({items})"
 
-    # 把嵌套的 key 也提升到顶层，方便 Config.DEVICE 这种写法
-    def _flatten(self, data: dict, prefix: str = ""):
+    # 展平到顶层: Config.MODEL_NAME / Config.EMBEDDING_DEVICE
+    # 仅当 short_key 不存在时才设，避免同名 key 后写覆盖前写
+    def _flatten(self, data: dict, prefix: str = "", _seen: set | None = None):
+        if _seen is None:
+            _seen = set()
         for k, v in data.items():
             full_key = f"{prefix}{k}".upper() if prefix else k.upper()
-            short_key = k.upper()  # Config.DEVICE 直接访问
+            short_key = k.upper()
             if isinstance(v, dict):
-                self._flatten(v, f"{k}_")
+                self._flatten(v, f"{k}_", _seen)
             else:
                 setattr(self, full_key, v)
-                setattr(self, short_key, v)
+                if short_key not in _seen and not hasattr(self, short_key):
+                    setattr(self, short_key, v)
+                    _seen.add(short_key)
 
 
-# 展平 + 嵌套两层访问: Config.DEVICE 或 Config.embedding.device
+# 展平 + 嵌套两层访问: Config.DEVICE 或 Config.EMBEDDING_DEVICE
 _config_root = _ConfigNamespace(CONFIG)
 _config_root._flatten(CONFIG)
 
-# 类型提示用
+# 类型提示
 class ConfigType:
     MODEL_NAME: str = CONFIG["embedding"]["model_name"]
     DEVICE: str = CONFIG["embedding"]["device"]

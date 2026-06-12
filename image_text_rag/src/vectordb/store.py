@@ -23,13 +23,9 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-# ── 配置 ──
-try:
-    from ..config.loader import Config
-except ImportError:
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from config.loader import Config
+from ..common import load_config, get_logger
+Config = load_config()
+_log = get_logger(__name__)
 
 _FAISS_AVAILABLE = False
 try:
@@ -116,7 +112,7 @@ class VectorStore:
         else:
             raise ValueError(f"不支持的索引类型: {self._index_type}")
 
-        print(f"[VectorStore] IndexIDMap({self._index_type})  dim={self._dim}")
+        _log.info("IndexIDMap(%s) dim=%d", self._index_type, self._dim)
 
     # ── 添加 ──
 
@@ -330,7 +326,7 @@ class VectorStore:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta_payload, f, ensure_ascii=False, indent=2)
 
-        print(f"[VectorStore] 已保存 → {save_dir}  ({self.count} 条)")
+        _log.info("已保存 → %s (%d条)", save_dir, self.count)
 
     def load(self, path: str | None = None) -> bool:
         load_dir = Path(path or self._persist_dir)
@@ -363,5 +359,5 @@ class VectorStore:
         self._id_to_int = payload["id_to_int"]
         self._int_to_id = {int(k): v for k, v in payload["int_to_id"].items()}
 
-        print(f"[VectorStore] 已加载 ← {load_dir}  ({self.count} 条)")
+        _log.info("已加载 ← %s (%d条)", load_dir, self.count)
         return True

@@ -21,15 +21,10 @@ from PIL import Image
 
 warnings.filterwarnings("ignore")
 
-# 全局配置导入 — 相对导入，包内/直接运行均可用
-try:
-    from ..config.loader import Config
-except ImportError:
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from config.loader import Config
+from ..common import load_config, get_logger
+Config = load_config()
+_log = get_logger(__name__)
 
-# ── 全局常量（统一读取配置，无硬编码） ──────────────────────────────────
 MODEL_NAME = Config.MODEL_NAME
 DEVICE = Config.DEVICE
 MAX_TEXT_LENGTH = Config.MAX_TEXT_LENGTH
@@ -57,7 +52,7 @@ class CLIPEmbedder:
         self._device = DEVICE
         self._max_len = MAX_TEXT_LENGTH
 
-        print(f"[CLIP嵌入器] 正在加载模型 {MODEL_NAME}，设备: {self._device} ...")
+        _log.info("正在加载模型 %s，设备: %s ...", MODEL_NAME, self._device)
         # 加载模型与预处理工具
         self._model = CLIPModel.from_pretrained(MODEL_NAME).to(self._device)
         self._processor = CLIPProcessor.from_pretrained(MODEL_NAME)
@@ -65,7 +60,7 @@ class CLIPEmbedder:
 
         # 自动读取向量输出维度
         self._dim = self._model.config.projection_dim
-        print(f"[CLIP嵌入器] 模型加载完成 √ 向量维度={self._dim}")
+        _log.info("模型加载完成 dim=%d", self._dim)
 
     @property
     def dim(self) -> int:
