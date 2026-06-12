@@ -146,6 +146,27 @@ def _handle_pure_llm_chat(question: str):
     })
     st.rerun()
 
+def _handle_image_search(image_bytes: bytes, filename: str):
+    "以图搜图 — 委托给 RAGPipeline。CLIP 视觉编码器 → FAISS → TopK"
+    st.session_state.messages.append({
+        "role": "user",
+        "content": f"📷 以图搜图: `{filename}`",
+    })
+    results = pipe.search_by_image(image_bytes)
+    n = len(results)
+    answer = (
+        f"📷 视觉检索完成，找到 **{n}** 个相关内容。\n\n"
+        f"CLIP 视觉编码器将上传图片映射到与知识库相同的 512 维向量空间，"
+        f"通过余弦相似度找到最匹配的图文。"
+        if n else "⚠ 未找到视觉相似内容。"
+    )
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": answer,
+        "results": results,
+    })
+    st.rerun()
+
 # ══════════════════════════════════════════════════════════════
 # 工具函数
 # ══════════════════════════════════════════════════════════════
@@ -268,6 +289,17 @@ with tab_chat:
                         for r in msg["results"]: _render_result_card(r)
 
     st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── 以图搜图快捷入口 ──
+    if has_rag:
+        with st.expander("🖼 以图搜图", expanded=False):
+            chat_img = st.file_uploader(
+                "上传图片进行视觉检索", type=["png","jpg","jpeg"],
+                key="chat_img_search", label_visibility="collapsed",
+            )
+            if chat_img:
+                _handle_image_search(chat_img.read(), chat_img.name)
+
     q = st.chat_input("输入问题，基于知识库回答…" if has_rag else "直接向 LLM 提问…")
     if q:
         if has_rag: _handle_rag_chat(q)
@@ -279,8 +311,10 @@ with tab_browse:
         st.info("📭 知识库为空，请先在侧边栏上传文档。")
     else:
         st.markdown(f"### 📚 知识库总览 · {pipe.total_vectors} 条向量")
+
+        # ── 文字检索 ──
         cq, ck = st.columns([3, 1])
-        with cq: browse_query = st.text_input("输入关键词检索", key="browse_input")
+        with cq: browse_query = st.text_input("🔤 输入关键词检索", key="browse_input")
         with ck: browse_k = st.number_input("Top-K", 1, 50, Config.TOP_K, key="browse_topk")
         if browse_query:
             results = pipe.search(browse_query, top_k=browse_k)
@@ -289,6 +323,31 @@ with tab_browse:
                 st.bar_chart({r.source[:25]: r.score for r in results}, use_container_width=True)
                 for r in results: _render_result_card(r)
             else: st.info("未找到相关内容。")
+
+        # ── 以图搜图 ──
+        st.markdown("---")
+        st.markdown("### 🖼 以图搜图")
+        st.caption("上传图片，CLIP 视觉编码器将其映射到向量空间，从知识库检索视觉相似的图文。")
+        img_upload = st.file_uploader(
+            "拖拽或选择图片 ...", type=["png", "jpg", "jpeg"],
+            key="img_search_upload", label_visibility="collapsed",
+        )
+        if img_upload:
+            col_img, col_res = st.columns([1, 2])
+            with col_img:
+                st.image(img_upload, caption="查询图片", use_container_width=True)
+            with col_res:
+                with st.spinner("🔍 CLIP 视觉检索中..."):
+                    img_results = pipe.search_by_image(img_upload.read())
+                if img_results:
+                    st.caption(f"视觉检索到 {len(img_results)} 条结果")
+                    st.bar_chart(
+                        {r.source[:25]: r.score for r in img_results},
+                        use_container_width=True, height=200,
+                    )
+                    for r in img_results: _render_result_card(r)
+                else:
+                    st.info("未找到视觉相似内容。")
 
 # ── TAB 3: 技术仪表盘 ──────────────────────────────────────
 with tab_tech:

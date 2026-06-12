@@ -54,7 +54,11 @@ class RAGPipeline:
         return len(chunks)
 
     def ingest_image(self, image_bytes: bytes, filename: str) -> int:
-        """图片入库 → 返回 1 成功 / 0 失败"""
+        """图片入库 → 返回 1 成功 / 0 失败
+
+        v2: 使用 CLIP 视觉编码器 (image_to_vector) 替代文本描述编码。
+            文本查询可直接检索图片视觉内容，实现真正的跨模态检索。
+        """
         ext = Path(filename).suffix.lower()
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as t:
             t.write(image_bytes)
@@ -62,25 +66,43 @@ class RAGPipeline:
         try:
             self.img_proc.preprocess(tp, max_size=512, compress_quality=85)
             info = self.img_proc.get_info(tp)
+            # 图片视觉向量 (CLIP vision encoder)
+            img_vec = self.embedder.image_to_vector(tp)
+            # 同时生成文本描述用于多模态对齐
             desc = f"[图片] {Path(filename).stem} | {info['width']}x{info['height']}"
         except Exception:
-            desc = f"[图片] {Path(filename).stem}"
+            # 损坏图片：用文件名作为fallback
+            img_vec = self.embedder.text_to_vector(f"[图片] {Path(filename).stem}")
+            desc = f"[图片] {Path(filename).stem}  (损坏)"
         finally:
             Path(tp).unlink(missing_ok=True)
 
-        vec = self.embedder.text_to_vector(desc)
         self.store.add(
-            vec.reshape(1, -1),
-            [{"text": desc, "source": filename, "type": "image"}],
+            img_vec.reshape(1, -1),
+            [{"text": desc, "source": filename, "type": "image",
+              "vec_type": "vision", "width": info.get("width", 0),
+              "height": info.get("height", 0)}],
         )
         self.store.save()
-        _log.info("图片入库: %s", filename)
+        _log.info("图片入库(视觉向量): %s", filename)
         return 1
 
     # ── 检索 ──
 
     def search(self, query: str, top_k: int | None = None) -> List[Any]:
         return self.retriever.search(query, top_k=top_k)
+
+    def search_by_image(self, image_bytes: bytes, top_k: int | None = None) -> List[Any]:
+        """以图搜图/以图搜文 — 用图片视觉向量检索"""
+        ext = ".jpg"
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as t:
+            t.write(image_bytes)
+            tp = t.name
+        try:
+            results = self.retriever.search_by_image(tp, top_k=top_k)
+        finally:
+            Path(tp).unlink(missing_ok=True)
+        return results
 
     # ── 问答 ──
 
