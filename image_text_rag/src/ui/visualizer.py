@@ -243,7 +243,15 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 📊 系统状态")
-    llm_ok = pipe.llm_healthy
+    # LLM 健康检查缓存 (30s, 避免每帧 HTTP 请求)
+    if "_last_health_check" not in st.session_state:
+        st.session_state._last_health_check = 0
+        st.session_state._health_status = False
+    if time.time() - st.session_state._last_health_check > 30:
+        st.session_state._health_status = pipe.llm_healthy
+        st.session_state._last_health_check = time.time()
+    llm_ok = st.session_state._health_status
+
     c1, c2, c3 = st.columns(3)
     c1.metric("向量数", pipe.total_vectors)
     c2.metric("维度", pipe.embedder.dim)
@@ -333,12 +341,13 @@ with tab_browse:
             key="img_search_upload", label_visibility="collapsed",
         )
         if img_upload:
+            img_bytes = img_upload.read()  # 先读取, 避免 st.image 消费后 read() 返回空
             col_img, col_res = st.columns([1, 2])
             with col_img:
-                st.image(img_upload, caption="查询图片", use_container_width=True)
+                st.image(img_bytes, caption="查询图片", use_container_width=True)
             with col_res:
                 with st.spinner("🔍 CLIP 视觉检索中..."):
-                    img_results = pipe.search_by_image(img_upload.read())
+                    img_results = pipe.search_by_image(img_bytes)
                 if img_results:
                     st.caption(f"视觉检索到 {len(img_results)} 条结果")
                     st.bar_chart(
@@ -354,19 +363,56 @@ with tab_tech:
     st.markdown("### 🔬 向量库 & 检索引擎技术仪表盘")
 
     if pipe.total_vectors == 0:
-        st.info("📭 知识库为空。请先在侧边栏上传文档，技术指标将在入库后自动展示。")
-        # 仍展示 CLIP 模型基础信息
-        with st.expander("🧠 CLIP 嵌入模型规格", expanded=True):
+        st.info("📭 知识库为空 — 以下为 CLIP 模型 & FAISS 引擎实时指标")
+
+        col_left, col_right = st.columns([1, 1])
+        with col_left:
+            st.markdown("##### 🧠 CLIP 嵌入模型规格")
             st.markdown(f"""
 | 属性 | 值 |
 |---|---|
 | 模型 | `{Config.MODEL_NAME}` |
 | 向量维度 | {pipe.embedder.dim} |
-| 设备 | `cpu` |
 | 最大文本长度 | {Config.MAX_TEXT_LENGTH} |
 | 架构 | ViT-B/32 (Vision Transformer) |
+| 推理引擎 | ONNX Runtime (CPU) |
 | 嵌入空间 | L2 归一化 → 余弦相似度 |
             """)
+        with col_right:
+            st.markdown("##### 🔢 实时向量采样")
+            sample_vec = pipe.embedder.text_to_vector("人工智能与机器学习的关系")
+            dims = min(20, len(sample_vec))
+            st.bar_chart({f"d{i}": float(sample_vec[i]) for i in range(dims)},
+                         use_container_width=True, height=200)
+            st.caption(f"μ={np.mean(sample_vec):.4f}  σ={np.std(sample_vec):.4f}  |L2|={np.linalg.norm(sample_vec):.4f}")
+
+        st.markdown("---")
+        st.markdown("##### 🔗 检索引擎架构")
+        st.markdown("""
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:.82rem;padding:1rem;background:rgba(20,10,40,.4);border-radius:12px;border:1px solid rgba(147,51,234,.12);">
+            <span style="color:#c084fc;">👤 输入</span>→
+            <span style="background:rgba(139,92,246,.15);padding:4px 10px;border-radius:8px;">🔤 Tokenizer</span>→
+            <span style="background:rgba(139,92,246,.15);padding:4px 10px;border-radius:8px;">🧠 CLIP Encoder</span>→
+            <span style="background:rgba(139,92,246,.15);padding:4px 10px;border-radius:8px;">📐 L2 Norm</span>→
+            <span style="background:rgba(139,92,246,.15);padding:4px 10px;border-radius:8px;">🔍 FAISS FlatIP</span>→
+            <span style="background:rgba(139,92,246,.15);padding:4px 10px;border-radius:8px;">📋 Top-K</span>→
+            <span style="background:rgba(139,92,246,.15);padding:4px 10px;border-radius:8px;">🧩 Context</span>→
+            <span style="background:rgba(139,92,246,.15);padding:4px 10px;border-radius:8px;">🤖 LLM</span>→
+            <span style="color:#c084fc;">💬 回答</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.markdown("##### ⏱ CLIP 推理延迟基准")
+        bench_vec = []
+        for _ in range(10):
+            t0 = time.time()
+            pipe.embedder.text_to_vector("基准测试查询文本")
+            bench_vec.append((time.time() - t0) * 1000)
+        bc1, bc2, bc3 = st.columns(3)
+        bc1.metric("平均", f"{np.mean(bench_vec):.1f} ms")
+        bc2.metric("P50", f"{np.median(bench_vec):.1f} ms")
+        bc3.metric("P95", f"{np.percentile(bench_vec, 95):.1f} ms")
     else:
         # ════ 第一行：核心指标 ─═══
         st.markdown("#### ⚡ 核心指标")
@@ -377,7 +423,7 @@ with tab_tech:
         # 估算内存
         vector_mem_mb = pipe.total_vectors * pipe.embedder.dim * 4 / (1024 * 1024)
         m4.metric("🧮 向量内存", f"{vector_mem_mb:.1f} MB")
-        m5.metric("🌐 LLM 状态", "🟣" if pipe.llm_healthy else "⚫")
+        m5.metric("🌐 LLM 状态", "🟣" if llm_ok else "⚫")
 
         st.markdown("---")
 

@@ -20,6 +20,7 @@ LLM 问答生成 — 基于检索上下文 + OpenAI 兼容 API 生成答案
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -215,7 +216,6 @@ class Generator:
                     data_str = line[6:]
                     if data_str.strip() == "[DONE]":
                         break
-                    import json
                     try:
                         chunk = json.loads(data_str)
                         delta = chunk["choices"][0].get("delta", {})

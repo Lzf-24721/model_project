@@ -63,15 +63,16 @@ class RAGPipeline:
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as t:
             t.write(image_bytes)
             tp = t.name
+
+        info: dict = {}
+        img_vec = None
+        desc = ""
         try:
             self.img_proc.preprocess(tp, max_size=512, compress_quality=85)
             info = self.img_proc.get_info(tp)
-            # 图片视觉向量 (CLIP vision encoder)
             img_vec = self.embedder.image_to_vector(tp)
-            # 同时生成文本描述用于多模态对齐
             desc = f"[图片] {Path(filename).stem} | {info['width']}x{info['height']}"
         except Exception:
-            # 损坏图片：用文件名作为fallback
             img_vec = self.embedder.text_to_vector(f"[图片] {Path(filename).stem}")
             desc = f"[图片] {Path(filename).stem}  (损坏)"
         finally:

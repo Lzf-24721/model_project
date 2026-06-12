@@ -158,7 +158,7 @@ class VectorStore:
                 base.train(vectors)
                 self._index_trained = True
             except Exception as e:
-                print(f"[VectorStore] IVF 训练失败: {e}")
+                _log.warning("IVF 训练失败: %s", e)
 
         # 分配内部 int ID 并写入
         int_ids = np.array(
@@ -336,7 +336,7 @@ class VectorStore:
         numpy_path = load_dir / "vectors.npy"
 
         if not state_path.exists():
-            print(f"[VectorStore] 存档不存在: {state_path}")
+            _log.warning("存档不存在: %s", state_path)
             return False
 
         with open(state_path) as f:

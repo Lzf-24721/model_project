@@ -14,6 +14,9 @@ from typing import List, Tuple
 
 from PIL import Image, UnidentifiedImageError
 
+from ..common import get_logger
+_log = get_logger(__name__)
+
 # ── 允许的图片格式 ──
 _ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 
@@ -101,7 +104,7 @@ class ImagePreprocessor:
             try:
                 results.append(self.load(p))
             except (FileNotFoundError, ValueError, UnidentifiedImageError) as e:
-                print(f"[ImagePreprocessor] 加载失败 {p}: {e}")
+                _log.warning("加载失败 %s: %s", p, e)
                 results.append(None)
         return results
 
