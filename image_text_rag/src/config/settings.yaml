@@ -1,0 +1,35 @@
+# ============================================
+# 多模态 RAG — 全局配置
+# ============================================
+
+project:
+  name: "multimodal_rag"
+  version: "1.0.0"
+
+# 嵌入模型 (CLIP — 文本+图片统一向量空间)
+embedding:
+  model_name: "clip-ViT-B-32"    # sentence-transformers 模型名
+  device: "cpu"                  # cpu / cuda
+  batch_size: 8                  # 编码批次大小
+
+# 文档切片
+document:
+  chunk_size: 300                # 每段最大字符数
+  chunk_overlap: 50              # 相邻段重叠字符数
+
+# FAISS 向量库
+vector_db:
+  index_type: "flat"             # flat = 暴力精确搜索
+  persist_dir: "data/vector_db"  # 持久化目录
+
+# 检索
+retrieval:
+  top_k: 5                       # 默认返回条数
+
+# LLM 问答生成
+llm:
+  provider: "ollama"             # ollama / vllm / openai
+  model: "qwen2.5:7b"
+  base_url: "http://localhost:11434/v1"
+  temperature: 0.1
+  max_tokens: 512
