@@ -41,11 +41,10 @@ class CLIPEmbedder:
     """
 
     def __init__(self):
-        # 设置 HF 镜像（国内网络加速）
         import os
+        os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ.setdefault("HF_ENDPOINT", Config.HF_ENDPOINT)
 
-        # 延迟导入torch与transformers，避免启动时加载重型依赖
         import torch
         from transformers import CLIPProcessor, CLIPModel
 
@@ -53,12 +52,10 @@ class CLIPEmbedder:
         self._max_len = MAX_TEXT_LENGTH
 
         _log.info("正在加载模型 %s，设备: %s ...", MODEL_NAME, self._device)
-        # 加载模型与预处理工具
-        self._model = CLIPModel.from_pretrained(MODEL_NAME).to(self._device)
-        self._processor = CLIPProcessor.from_pretrained(MODEL_NAME)
-        self._model.eval()  # 固定评估模式，关闭梯度
+        self._model = CLIPModel.from_pretrained(MODEL_NAME, local_files_only=True).to(self._device)
+        self._processor = CLIPProcessor.from_pretrained(MODEL_NAME, local_files_only=True)
+        self._model.eval()
 
-        # 自动读取向量输出维度
         self._dim = self._model.config.projection_dim
         _log.info("模型加载完成 dim=%d", self._dim)
 

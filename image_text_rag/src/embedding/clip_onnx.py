@@ -52,8 +52,9 @@ class CLIPEmbedderONNX:
         from transformers import CLIPProcessor, CLIPModel
         import onnxruntime as ort
 
-        # 必须在导入 transformers 之前设置镜像
-        os.environ["HF_ENDPOINT"] = Config.HF_ENDPOINT
+        # 强制离线模式 — 所有文件已在 HF 缓存中
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ.setdefault("HF_ENDPOINT", Config.HF_ENDPOINT)
 
         self._max_len = MAX_TEXT_LENGTH
         self._cache_dir = Path(ONNX_CACHE_DIR)
@@ -65,7 +66,7 @@ class CLIPEmbedderONNX:
         self._sess_opts.graph_optimization_level = (
             ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         )
-        self._sess_opts.enable_mem_reuse = False  # 允许动态 batch size
+        self._sess_opts.enable_mem_reuse = False
 
         # 加载 / 导出 ONNX 模型
         self._text_path = self._cache_dir / "clip_text_encoder.onnx"
@@ -73,7 +74,9 @@ class CLIPEmbedderONNX:
 
         if self._text_path.exists() and self._vision_path.exists():
             _log.info("从缓存加载ONNX模型")
-            self._processor = CLIPProcessor.from_pretrained(MODEL_NAME)
+            self._processor = CLIPProcessor.from_pretrained(
+                MODEL_NAME, local_files_only=True
+            )
             self._text_sess = ort.InferenceSession(
                 str(self._text_path), self._sess_opts,
                 providers=["CPUExecutionProvider"],
@@ -84,15 +87,14 @@ class CLIPEmbedderONNX:
             )
             self._dim = self._text_sess.get_outputs()[0].shape[1]
         else:
-            _log.info("首次运行 — 从 %s 导出ONNX模型", MODEL_NAME)
-            from huggingface_hub import try_to_load_from_cache
-            _cache = try_to_load_from_cache(MODEL_NAME, "config.json")
-            _local_only = _cache is not None
+            _log.info("首次运行 — 导出 ONNX 模型")
             pt_model = CLIPModel.from_pretrained(
-                MODEL_NAME, local_files_only=_local_only
+                MODEL_NAME, local_files_only=True
             )
             pt_model.eval()
-            self._processor = CLIPProcessor.from_pretrained(MODEL_NAME)
+            self._processor = CLIPProcessor.from_pretrained(
+                MODEL_NAME, local_files_only=True
+            )
             self._dim = pt_model.config.projection_dim
 
             _log.info("导出 text_encoder...")

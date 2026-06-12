@@ -469,7 +469,7 @@ with tab_tech:
             <table class="kv-table">
             <tr><td>CLIP</td><td>ViT-B/32</td></tr>
             <tr><td>FAISS</td><td>FlatIP · CPU</td></tr>
-            <tr><td>LLM</td><td>{gen.model}</td></tr>
+            <tr><td>LLM</td><td>{pipe.generator.model}</td></tr>
             <tr><td>块大小</td><td>{Config.CHUNK_SIZE} 字</td></tr>
             <tr><td>重叠</td><td>{Config.CHUNK_OVERLAP} 字</td></tr>
             <tr><td>Top-K</td><td>{Config.TOP_K}</td></tr>
